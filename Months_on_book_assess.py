@@ -4,9 +4,10 @@ import numpy as np
 import io
 import base64
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 # --------------------------------------------
-# Generate Dummy Data
+# Generate Dummy Data (no months_on_book)
 # --------------------------------------------
 def generate_dummy_data():
     np.random.seed(42)
@@ -15,10 +16,7 @@ def generate_dummy_data():
         "client_id": range(1, len(dates) + 1),
         "origination_date": dates,
     })
-    df["months_on_book"] = np.random.randint(1, 60, size=len(df))
-    df["days_past_due"] = df["months_on_book"] * 1.5 + np.random.randn(len(df)) * 10
-    df["origination_year"] = df["origination_date"].dt.year
-    df["origination_quarter"] = df["origination_date"].dt.quarter
+    df["days_past_due"] = np.random.randint(0, 120, size=len(df))
     return df
 
 
@@ -38,12 +36,12 @@ def download_plot(fig):
 st.title("📈 Months on Book vs Days Past Due Analysis")
 
 st.write("""
-This app analyzes **Months on Book** relationship with **Days Past Due**  
-for clients with different **origination periods**.
+This app analyzes **Months on Book** (calculated from a user-provided Run Date)  
+and its relationship with **Days Past Due**.
 """)
 
 # ----------------------------------------------------
-# Ask user if they want to use dummy data
+# Ask user if they want dummy data
 # ----------------------------------------------------
 st.subheader("📌 Choose Your Dataset")
 
@@ -56,17 +54,38 @@ if use_dummy == "Yes, use dummy data":
     df = generate_dummy_data()
     st.success("Using dummy data")
     st.dataframe(df.head())
+
 else:
-    uploaded = st.file_uploader("Upload your CSV file", type=["csv"])
+    uploaded = st.file_uploader("Upload your CSV file (must contain 'origination_date' column)", type=["csv"])
     if uploaded is not None:
         df = pd.read_csv(uploaded, parse_dates=["origination_date"])
-        df["origination_year"] = df["origination_date"].dt.year
-        df["origination_quarter"] = df["origination_date"].dt.quarter
         st.success("File uploaded successfully")
         st.dataframe(df.head())
     else:
         st.warning("Waiting for file upload...")
         st.stop()
+
+# ----------------------------------------------------
+# Run Date Input
+# ----------------------------------------------------
+st.subheader("📅 Run Date")
+
+run_date = st.date_input(
+    "Select Run Date:",
+    value=datetime.today()
+)
+
+# ----------------------------------------------------
+# Compute Months on Book
+# ----------------------------------------------------
+df["run_date"] = pd.to_datetime(run_date)
+df["days_diff"] = (df["run_date"] - df["origination_date"]).dt.days
+df["months_on_book"] = df["days_diff"] / 30.44  # ~avg days per month
+df["months_on_book"] = df["months_on_book"].clip(lower=0)
+
+# Add year/quarter for filtering
+df["origination_year"] = df["origination_date"].dt.year
+df["origination_quarter"] = df["origination_date"].dt.quarter
 
 # ----------------------------------------------------
 # User Input for Grouping
@@ -78,7 +97,6 @@ group_choice = st.selectbox(
     ["By Year", "By Year & Quarter", "By Quarter Only (Seasonality)"]
 )
 
-# Filtering options
 if group_choice == "By Year":
     selected_year = st.selectbox("Select Origination Year", sorted(df["origination_year"].unique()))
     filtered_df = df[df["origination_year"] == selected_year]
@@ -90,7 +108,7 @@ elif group_choice == "By Year & Quarter":
     filtered_df = df[(df["origination_year"] == selected_year) &
                      (df["origination_quarter"] == selected_quarter)]
 
-else:  # Seasonality check
+else:  # Seasonality only
     selected_quarter = st.selectbox("Select Quarter (1–4)", [1, 2, 3, 4])
     filtered_df = df[df["origination_quarter"] == selected_quarter]
 
