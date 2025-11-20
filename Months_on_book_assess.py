@@ -1,10 +1,11 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import base64
 import matplotlib.pyplot as plt
 from datetime import datetime
+
 
 # --------------------------------------------
 # Generate Dummy Data (no months_on_book)
@@ -16,6 +17,7 @@ def generate_dummy_data():
         "client_id": range(1, len(dates) + 1),
         "origination_date": dates,
     })
+
     df["days_past_due"] = np.random.randint(0, 120, size=len(df))
     return df
 
@@ -31,108 +33,111 @@ def download_plot(fig):
 
 
 # --------------------------------------------
-# Streamlit App Layout
+# Streamlit App
 # --------------------------------------------
-st.title("📈 Months on Book vs Days Past Due Analysis")
+st.title("📈 Trend Analysis: Months on Book vs Days Past Due")
 
 st.write("""
-This app analyzes **Months on Book** (calculated from a user-provided Run Date)  
-and its relationship with **Days Past Due**.
+This app assesses whether **cumulative Days Past Due (DPD)**  
+shows a trend as clients progress through **Months on Book (MOB)**.
 """)
 
-# ----------------------------------------------------
-# Ask user if they want dummy data
-# ----------------------------------------------------
-st.subheader("📌 Choose Your Dataset")
 
-use_dummy = st.radio(
-    "Do you want to use the built-in dummy dataset?",
-    ("Yes, use dummy data", "No, upload my own file")
-)
+# 1. Select Dataset
+st.subheader("📌 Select Dataset")
 
-if use_dummy == "Yes, use dummy data":
+use_dummy = st.radio("Use dummy dataset?", ["Yes", "No (upload CSV)"])
+
+if use_dummy == "Yes":
     df = generate_dummy_data()
-    st.success("Using dummy data")
+    st.success("Dummy data loaded.")
     st.dataframe(df.head())
 
 else:
-    uploaded = st.file_uploader("Upload your CSV file (must contain 'origination_date' column)", type=["csv"])
-    if uploaded is not None:
-        df = pd.read_csv(uploaded, parse_dates=["origination_date"])
-        st.success("File uploaded successfully")
-        st.dataframe(df.head())
-    else:
-        st.warning("Waiting for file upload...")
+    file = st.file_uploader("Upload CSV with 'origination_date' and 'days_past_due'", type="csv")
+    if file is None:
         st.stop()
 
-# ----------------------------------------------------
-# Run Date Input
-# ----------------------------------------------------
+    df = pd.read_csv(file, parse_dates=["origination_date"])
+    st.success("File uploaded.")
+    st.dataframe(df.head())
+
+
+# 2. Run Date
 st.subheader("📅 Run Date")
 
-run_date = st.date_input(
-    "Select Run Date:",
-    value=datetime.today()
-)
-
-# ----------------------------------------------------
-# Compute Months on Book
-# ----------------------------------------------------
+run_date = st.date_input("Select Run Date:", datetime.today())
 df["run_date"] = pd.to_datetime(run_date)
-df["days_diff"] = (df["run_date"] - df["origination_date"]).dt.days
-df["months_on_book"] = df["days_diff"] / 30.44  # ~avg days per month
-df["months_on_book"] = df["months_on_book"].clip(lower=0)
 
-# Add year/quarter for filtering
+
+# 3. Calculate MOB
+df["days_diff"] = (df["run_date"] - df["origination_date"]).dt.days
+df["months_on_book"] = (df["days_diff"] / 30.44).clip(lower=0).astype(int)
+
 df["origination_year"] = df["origination_date"].dt.year
 df["origination_quarter"] = df["origination_date"].dt.quarter
 
-# ----------------------------------------------------
-# User Input for Grouping
-# ----------------------------------------------------
+
+# --------------------------------------------------------
+# 4. Grouping Options
+# --------------------------------------------------------
 st.subheader("📊 Grouping Options")
 
 group_choice = st.selectbox(
-    "How do you want to group clients?",
+    "Choose grouping:",
     ["By Year", "By Year & Quarter", "By Quarter Only (Seasonality)"]
 )
 
 if group_choice == "By Year":
-    selected_year = st.selectbox("Select Origination Year", sorted(df["origination_year"].unique()))
-    filtered_df = df[df["origination_year"] == selected_year]
+    groups = df.groupby("origination_year")
 
 elif group_choice == "By Year & Quarter":
-    selected_year = st.selectbox("Select Origination Year", sorted(df["origination_year"].unique()))
-    available_quarters = sorted(df[df["origination_year"] == selected_year]["origination_quarter"].unique())
-    selected_quarter = st.selectbox("Select Quarter", available_quarters)
-    filtered_df = df[(df["origination_year"] == selected_year) &
-                     (df["origination_quarter"] == selected_quarter)]
+    df["year_quarter"] = df["origination_year"].astype(str) + " Q" + df["origination_quarter"].astype(str)
+    groups = df.groupby("year_quarter")
 
-else:  # Seasonality only
-    selected_quarter = st.selectbox("Select Quarter (1–4)", [1, 2, 3, 4])
-    filtered_df = df[df["origination_quarter"] == selected_quarter]
+else:  # Seasonality only (all years combined)
+    groups = df.groupby("origination_quarter")
 
-# ----------------------------------------------------
-# Plot Section
-# ----------------------------------------------------
-st.subheader("📈 Plot: Months on Book vs Days Past Due")
 
-if filtered_df.empty:
-    st.error("No data available for the selected group.")
-else:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.scatter(filtered_df["months_on_book"], filtered_df["days_past_due"])
-    ax.set_xlabel("Months on Book")
-    ax.set_ylabel("Days Past Due")
-    ax.set_title("Months on Book vs Days Past Due")
+# --------------------------------------------------------
+# 5. Build Line Plot (Cumulative Trend)
+# --------------------------------------------------------
+st.subheader("📈 Cumulative DPD Trend Plot")
 
-    st.pyplot(fig)
+fig, ax = plt.subplots(figsize=(9, 6))
 
-    # Download button
-    png_buf = download_plot(fig)
-    st.download_button(
-        label="⬇️ Download Plot as PNG",
-        data=png_buf,
-        file_name="mob_vs_dpd_plot.png",
-        mime="image/png"
+for group_name, group_data in groups:
+
+    # Aggregate mean DPD per MOB
+    temp = (
+        group_data.groupby("months_on_book")["days_past_due"]
+        .mean()
+        .sort_index()
+        .reset_index()
     )
+
+    # Add cumulative average DPD
+    temp["cumulative_dpd"] = temp["days_past_due"].expanding().mean()
+
+    # Plot
+    ax.plot(temp["months_on_book"], temp["cumulative_dpd"], label=str(group_name))
+
+ax.set_xlabel("Months on Book (MOB)")
+ax.set_ylabel("Cumulative Avg Days Past Due")
+ax.set_title("Cumulative DPD Trend Across Origination Cohorts")
+ax.legend(title="Cohort")
+ax.grid(True)
+
+st.pyplot(fig)
+
+
+# --------------------------------------------------------
+# 6. Download Plot
+# --------------------------------------------------------
+png_buf = download_plot(fig)
+st.download_button(
+    "⬇️ Download Plot as PNG",
+    data=png_buf,
+    file_name="cumulative_dpd_trend.png",
+    mime="image/png"
+)
