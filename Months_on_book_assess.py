@@ -51,7 +51,6 @@ st.subheader("📌 Select Dataset")
 use_dummy = st.radio("Use dummy dataset?", ["Yes", "No (upload CSV)"])
 
 if use_dummy == "Yes":
-    if use_dummy == "Yes":
     st.info("Loading default dummy dataset (economic stress simulation)…")
 
     try:
