@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -6,9 +5,8 @@ import io
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-
 # --------------------------------------------
-# Generate Dummy Data (no months_on_book)
+# Generate Dummy Data
 # --------------------------------------------
 def generate_dummy_data():
     np.random.seed(42)
@@ -17,7 +15,6 @@ def generate_dummy_data():
         "client_id": range(1, len(dates) + 1),
         "origination_date": dates,
     })
-
     df["days_past_due"] = np.random.randint(0, 120, size=len(df))
     return df
 
@@ -35,15 +32,20 @@ def download_plot(fig):
 # --------------------------------------------
 # Streamlit App
 # --------------------------------------------
-st.title("📈 Trend Analysis: Months on Book vs Days Past Due")
+st.title("📈 Trend Analysis: MOB vs DPD%, DPD Thresholds & Cohort Heatmaps")
 
 st.write("""
-This app assesses whether **cumulative Days Past Due (DPD)**  
-shows a trend as clients progress through **Months on Book (MOB)**.
+This app allows you to analyze **loan performance over time**
+using:
+- **Months on Book (MOB)**
+- **DPD thresholds (1+, 10+, 30+, 60+, 90+)**
+- **Cohort trends**
+- **Cohort heatmaps**
+
+You can upload your own dataset or use dummy data.
 """)
 
-
-# 1. Select Dataset
+# ---------------- 1. Dataset selection ----------------
 st.subheader("📌 Select Dataset")
 
 use_dummy = st.radio("Use dummy dataset?", ["Yes", "No (upload CSV)"])
@@ -54,7 +56,7 @@ if use_dummy == "Yes":
     st.dataframe(df.head())
 
 else:
-    file = st.file_uploader("Upload CSV with 'origination_date' and 'days_past_due'", type="csv")
+    file = st.file_uploader("Upload CSV with 'origination_date' & 'days_past_due'", type="csv")
     if file is None:
         st.stop()
 
@@ -63,14 +65,17 @@ else:
     st.dataframe(df.head())
 
 
-# 2. Run Date
-st.subheader("📅 Run Date")
+# ---------------- 2. Minimum origination date ----------------
+st.subheader("📅 Minimum Origination Date Filter")
 
+min_date = st.date_input("Select minimum origination date:", df["origination_date"].min().date())
+df = df[df["origination_date"] >= pd.to_datetime(min_date)]
+
+
+# ---------------- 3. Run date + MOB ----------------
 run_date = st.date_input("Select Run Date:", datetime.today())
 df["run_date"] = pd.to_datetime(run_date)
 
-
-# 3. Calculate MOB
 df["days_diff"] = (df["run_date"] - df["origination_date"]).dt.days
 df["months_on_book"] = (df["days_diff"] / 30.44).clip(lower=0).astype(int)
 
@@ -78,9 +83,20 @@ df["origination_year"] = df["origination_date"].dt.year
 df["origination_quarter"] = df["origination_date"].dt.quarter
 
 
-# --------------------------------------------------------
-# 4. Grouping Options
-# --------------------------------------------------------
+# ---------------- 4. DPD threshold selection ----------------
+st.subheader("⚙️ DPD Threshold Selection")
+
+dpd_threshold = st.number_input(
+    "Enter DPD Threshold (Example: 1 for 1+, 30 for 30+):", 
+    min_value=1, 
+    max_value=120, 
+    value=1
+)
+
+df["dpd_flag"] = df["days_past_due"] >= dpd_threshold
+
+
+# ---------------- 5. Group selection ----------------
 st.subheader("📊 Grouping Options")
 
 group_choice = st.selectbox(
@@ -90,54 +106,102 @@ group_choice = st.selectbox(
 
 if group_choice == "By Year":
     groups = df.groupby("origination_year")
+    cohort_label = "origination_year"
 
 elif group_choice == "By Year & Quarter":
     df["year_quarter"] = df["origination_year"].astype(str) + " Q" + df["origination_quarter"].astype(str)
     groups = df.groupby("year_quarter")
+    cohort_label = "year_quarter"
 
-else:  # Seasonality only (all years combined)
+else:
     groups = df.groupby("origination_quarter")
+    cohort_label = "origination_quarter"
 
 
-# --------------------------------------------------------
-# 5. Build Line Plot (Cumulative Trend)
-# --------------------------------------------------------
-st.subheader("📈 Cumulative DPD Trend Plot")
+# ---------------- 6. Line Plot - DPD% trend ----------------
+st.subheader("📈 DPD% Trend Across Cohorts")
 
 fig, ax = plt.subplots(figsize=(9, 6))
 
-for group_name, group_data in groups:
-
-    # Aggregate mean DPD per MOB
-    temp = (
-        group_data.groupby("months_on_book")["days_past_due"]
+for name, data in groups:
+    mob_group = (
+        data.groupby("months_on_book")["dpd_flag"]
         .mean()
         .sort_index()
         .reset_index()
     )
 
-    # Add cumulative average DPD
-    temp["cumulative_dpd"] = temp["days_past_due"].expanding().mean()
+    mob_group["dpd_percent"] = mob_group["dpd_flag"] * 100
 
-    # Plot
-    ax.plot(temp["months_on_book"], temp["cumulative_dpd"], label=str(group_name))
+    ax.plot(
+        mob_group["months_on_book"], 
+        mob_group["dpd_percent"], 
+        label=str(name)
+    )
 
 ax.set_xlabel("Months on Book (MOB)")
-ax.set_ylabel("Cumulative Avg Days Past Due")
-ax.set_title("Cumulative DPD Trend Across Origination Cohorts")
+ax.set_ylabel(f"DPD% (DPD ≥ {dpd_threshold})")
+ax.set_title(f"DPD% Trend Across Cohorts (Threshold: {dpd_threshold}+ DPD)")
 ax.legend(title="Cohort")
 ax.grid(True)
 
 st.pyplot(fig)
 
+st.write(f"""
+### 📝 Interpretation:  
+This plot shows the **percentage of accounts in each cohort** that have  
+**DPD ≥ {dpd_threshold}** at each MOB.
 
-# --------------------------------------------------------
-# 6. Download Plot
-# --------------------------------------------------------
-png_buf = download_plot(fig)
-st.download_button(
-    "⬇️ Download Plot as PNG",
-    data=png_buf,
-    file_name="cumulative_dpd_trend.png",
-    mime="image/png"
+- If curves rise sharply → early delinquency buildup (high credit risk)  
+- Flat or declining curves → stable cohorts  
+- Comparing cohorts tells you **vintage quality**  
+""")
+
+
+# ---------------- 7. Cohort Heatmap ----------------
+st.subheader("🔥 Cohort Heatmap (MOB × Cohort)")
+
+# Pivot table: rows = cohort, columns = MOB
+heatmap_data = (
+    df.groupby([cohort_label, "months_on_book"])["dpd_flag"]
+    .mean()
+    .unstack(fill_value=0) * 100
 )
+
+fig2, ax2 = plt.subplots(figsize=(10, 6))
+im = ax2.imshow(heatmap_data, aspect='auto')
+
+ax2.set_xticks(np.arange(len(heatmap_data.columns)))
+ax2.set_xticklabels(heatmap_data.columns)
+
+ax2.set_yticks(np.arange(len(heatmap_data.index)))
+ax2.set_yticklabels(heatmap_data.index)
+
+plt.colorbar(im, label=f"DPD% (DPD ≥ {dpd_threshold})")
+ax2.set_title(f"Cohort Heatmap: DPD% (Threshold: {dpd_threshold}+)")
+ax2.set_xlabel("Months on Book (MOB)")
+ax2.set_ylabel("Cohort")
+
+st.pyplot(fig2)
+
+st.write(f"""
+### 📝 Interpretation:  
+This heatmap gives a **vintage-quality view**:
+
+- **Rows = Cohorts** (year or quarter)  
+- **Columns = MOB**  
+- **Colors = DPD%** for DPD ≥ {dpd_threshold}
+
+📌 **Use Case:**  
+- Quickly detect weak cohorts (darker colors early)  
+- Compare performance at same MOB  
+- Identify underwriting or economic changes  
+""")
+
+
+# ---------------- 8. Download options ----------------
+png_buf = download_plot(fig)
+heat_buf = download_plot(fig2)
+
+st.download_button("⬇️ Download DPD% Trend Plot", png_buf, "dpd_trend.png")
+st.download_button("⬇️ Download Cohort Heatmap", heat_buf, "cohort_heatmap.png")
