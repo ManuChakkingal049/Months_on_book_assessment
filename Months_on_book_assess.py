@@ -51,9 +51,21 @@ st.subheader("📌 Select Dataset")
 use_dummy = st.radio("Use dummy dataset?", ["Yes", "No (upload CSV)"])
 
 if use_dummy == "Yes":
-    df = generate_dummy_data()
-    st.success("Dummy data loaded.")
-    st.dataframe(df.head())
+    if use_dummy == "Yes":
+    st.info("Loading default dummy dataset (economic stress simulation)…")
+
+    try:
+        df = pd.read_csv("economic_dpd_dataset.csv", parse_dates=["origination_date"])
+        st.success("Economic dummy dataset loaded.")
+        st.dataframe(df.head())
+
+    except FileNotFoundError:
+        st.error("""
+        ❌ Could not find **economic_dpd_dataset.csv**.
+
+        Please place the file in the same directory as this Streamlit script.
+        """)
+        st.stop()
 
 else:
     file = st.file_uploader("Upload CSV with 'origination_date' & 'days_past_due'", type="csv")
